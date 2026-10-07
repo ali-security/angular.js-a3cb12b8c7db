@@ -3796,6 +3796,39 @@ describe('$compile', function() {
         expect(log).toEqual(['carrot']);
       });
     });
+
+
+    it('should not interpolate textarea content to prevent XSS', inject(function($compile, $rootScope) {
+      $rootScope.name = 'foo';
+      element = $compile('<textarea>{{ name }}</textarea>')($rootScope);
+      $rootScope.$digest();
+      expect(element.text()).toBe('{{ name }}');
+    }));
+
+
+    it('should not interpolate textarea content with malicious expressions', inject(function($compile, $rootScope) {
+      element = $compile('<textarea>{{ $eval.constructor("alert(1)")() }}</textarea>')($rootScope);
+      $rootScope.$digest();
+      expect(element.text()).toBe('{{ $eval.constructor("alert(1)")() }}');
+    }));
+
+
+    it('should not evaluate expressions in the content of a nested textarea', inject(function($compile, $rootScope) {
+      $rootScope.pwn = jasmine.createSpy('pwn').and.returnValue('pwned');
+      element = $compile('<div><span>{{ 1 + 1 }}</span><textarea>{{ pwn() }}</textarea></div>')($rootScope);
+      $rootScope.$digest();
+      expect($rootScope.pwn).not.toHaveBeenCalled();
+      expect(element.find('span').text()).toBe('2');
+      expect(element.find('textarea').text()).toBe('{{ pwn() }}');
+    }));
+
+
+    it('should still allow textarea with ngModel to function correctly', inject(function($compile, $rootScope) {
+      $rootScope.val = 'initial';
+      element = $compile('<textarea ng-model="val"></textarea>')($rootScope);
+      $rootScope.$digest();
+      expect(element.val()).toBe('initial');
+    }));
   });
 
   describe('collector', function() {

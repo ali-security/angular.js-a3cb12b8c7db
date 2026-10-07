@@ -2531,7 +2531,8 @@ function $CompileProvider($provide, $$sanitizeUriProvider) {
 
         childLinkFn = (nodeLinkFn && nodeLinkFn.terminal ||
                       !(childNodes = nodeList[i].childNodes) ||
-                      !childNodes.length)
+                      !childNodes.length ||
+                      nodeName_(nodeList[i]) === 'textarea')
             ? null
             : compileNodes(childNodes,
                  nodeLinkFn ? (
