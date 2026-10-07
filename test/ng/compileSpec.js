@@ -4175,7 +4175,7 @@ describe('$compile', function() {
       beforeEach(function() {
         module(function() {
           // Create directives that capture the `attr` object
-          ['input', 'a', 'img'].forEach(function(tag) {
+          ['input', 'a', 'img', 'source'].forEach(function(tag) {
             directive(tag, valueFn({
               restrict: 'ECA',
               link: function(scope, element, attr) {
@@ -4290,6 +4290,25 @@ describe('$compile', function() {
       it('should not accept trusted values for img[srcset]', inject(function($compile, $rootScope, $sce) {
         var trusted = $sce.trustAsMediaUrl('trustme:foo()');
         element = $compile('<img></img>')($rootScope);
+        expect(function() {
+          $rootScope.attr.$set('srcset', trusted);
+        }).toThrowMinErr('$compile', 'srcset', 'Can\'t pass trusted values to `$set(\'srcset\', value)`: "trustme:foo()"');
+      }));
+
+      it('should automatically sanitize source[srcset]', inject(function($compile, $rootScope) {
+        element = $compile('<source></source>')($rootScope);
+        $rootScope.attr.$set('srcset', 'evil:foo()');
+        expect(element.attr('srcset')).toEqual('unsafe:evil:foo()');
+        expect($rootScope.attr.srcset).toEqual('unsafe:evil:foo()');
+
+        $rootScope.attr.$set('srcset', 'http://example.com/image1.png 1x, javascript:doEvilStuff() 2x');
+        expect(element.attr('srcset')).toEqual('http://example.com/image1.png 1x,unsafe:javascript:doEvilStuff() 2x');
+        expect($rootScope.attr.srcset).toEqual('http://example.com/image1.png 1x,unsafe:javascript:doEvilStuff() 2x');
+      }));
+
+      it('should not accept trusted values for source[srcset]', inject(function($compile, $rootScope, $sce) {
+        var trusted = $sce.trustAsMediaUrl('trustme:foo()');
+        element = $compile('<source></source>')($rootScope);
         expect(function() {
           $rootScope.attr.$set('srcset', trusted);
         }).toThrowMinErr('$compile', 'srcset', 'Can\'t pass trusted values to `$set(\'srcset\', value)`: "trustme:foo()"');
@@ -11617,6 +11636,102 @@ describe('$compile', function() {
         expect(duration).toBeLessThan(1000);
       })
     );
+  });
+
+  // Support: IE 9 only
+  // IE 9 rejects the `source` tag with
+  // "Unable to get value of the property 'childNodes': object is null or undefined"
+  if (msie !== 9) {
+    describe('source[srcset] sanitization', function() {
+      it('should NOT require trusted values for trusted URI values', inject(function($rootScope, $compile) {
+        element = $compile('<picture><source srcset="{{testUrl}}"></source></picture>')($rootScope);
+        $rootScope.testUrl = 'http://example.com/image.png'; // `http` is trusted
+        $rootScope.$digest();
+        expect(element.find('source').attr('srcset')).toEqual('http://example.com/image.png');
+      }));
+
+      it('should sanitize interpolated values', inject(function($rootScope, $compile) {
+        element = $compile('<picture><source srcset="{{testUrl}}"></source></picture>')($rootScope);
+        $rootScope.testUrl = 'javascript:doEvilStuff()';
+        $rootScope.$digest();
+        expect(element.find('source').attr('srcset')).toEqual('unsafe:javascript:doEvilStuff()');
+
+        $rootScope.testUrl = 'http://example.com/image1.png 1x, javascript:doEvilStuff() 2x';
+        $rootScope.$digest();
+        expect(element.find('source').attr('srcset')).toEqual(
+            'http://example.com/image1.png 1x,unsafe:javascript:doEvilStuff() 2x');
+      }));
+
+      it('should NOT work with trusted values', inject(function($rootScope, $compile, $sce) {
+        // A limitation of the approach used for srcset is that you cannot use `trustAsUrl`.
+        // Use trustAsHtml and ng-bind-html to work around this.
+        element = $compile('<picture><source srcset="{{testUrl}}"></source></picture>')($rootScope);
+        $rootScope.testUrl = $sce.trustAsUrl('javascript:something');
+        $rootScope.$digest();
+        expect(element.find('source').attr('srcset')).toEqual('unsafe:javascript:something');
+      }));
+
+      it('should sanitize ng-srcset and ng-attr-srcset values', inject(function($rootScope, $compile) {
+        element = $compile('<picture><source ng-srcset="{{testUrl}}"></source></picture>')($rootScope);
+        $rootScope.testUrl = 'javascript:doEvilStuff()';
+        $rootScope.$digest();
+        expect(element.find('source').attr('srcset')).toEqual('unsafe:javascript:doEvilStuff()');
+        dealoc(element);
+
+        element = $compile('<picture><source ng-attr-srcset="{{testUrl}}"></source></picture>')($rootScope);
+        $rootScope.$digest();
+        expect(element.find('source').attr('srcset')).toEqual('unsafe:javascript:doEvilStuff()');
+      }));
+
+      it('should use $$sanitizeUri', function() {
+        var $$sanitizeUri = jasmine.createSpy('$$sanitizeUri').and.returnValue('someSanitizedUrl');
+        module(function($provide) {
+          $provide.value('$$sanitizeUri', $$sanitizeUri);
+        });
+        inject(function($compile, $rootScope) {
+          element = $compile('<picture><source srcset="{{testUrl}}"></source></picture>')($rootScope);
+          $rootScope.testUrl = 'someUrl';
+          $rootScope.$apply();
+          expect(element.find('source').attr('srcset')).toBe('someSanitizedUrl');
+          expect($$sanitizeUri).toHaveBeenCalledWith($rootScope.testUrl, true);
+        });
+      });
+    });
+  }
+
+  describe('srcset sanitization of candidates with invalid descriptors', function() {
+    // A candidate with a non-numeric descriptor (e.g. `xyz`) must not cause the candidates that
+    // follow it to bypass the `imgSrcSanitizationTrustedUrlList`.
+    beforeEach(module(function($compileProvider) {
+      $compileProvider.imgSrcSanitizationTrustedUrlList(/^https:\/\/angularjs\.org\//);
+    }));
+
+    ['img', 'source'].forEach(function(tag) {
+      // Support: IE 9 only
+      // IE 9 rejects the `source` tag
+      if (msie !== 9 || tag === 'img') {
+        ['srcset', 'ng-srcset', 'ng-attr-srcset'].forEach(function(attrName) {
+          it('should sanitize every candidate of ' + tag + '[' + attrName + ']', inject(function($rootScope, $compile) {
+            element = $compile('<picture><' + tag + ' ' + attrName + '="{{testUrl}}"></' + tag + '></picture>')($rootScope);
+
+            $rootScope.testUrl = 'https://angularjs.org/favicon.ico xyz,https://angular.dev/favicon.ico';
+            $rootScope.$digest();
+            expect(element.find(tag).attr('srcset')).toEqual(
+                'https://angularjs.org/favicon.ico xyz,unsafe:https://angular.dev/favicon.ico');
+
+            $rootScope.testUrl = 'https://angularjs.org/favicon.ico xyz,data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=';
+            $rootScope.$digest();
+            expect(element.find(tag).attr('srcset')).toMatch(
+                /^https:\/\/angularjs\.org\/favicon\.ico xyz,unsafe:data:image\/svg\+xml;base64,unsafe:/);
+
+            $rootScope.testUrl = 'https://angularjs.org/favicon.ico 1x,https://angular.dev/favicon.ico 2x';
+            $rootScope.$digest();
+            expect(element.find(tag).attr('srcset')).toEqual(
+                'https://angularjs.org/favicon.ico 1x,unsafe:https://angular.dev/favicon.ico 2x');
+          }));
+        });
+      }
+    });
   });
 
   describe('a[href] sanitization', function() {

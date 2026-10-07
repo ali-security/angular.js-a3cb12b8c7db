@@ -519,6 +519,26 @@ describe('ngProp*', function() {
             expect(duration).toBeLessThan(1000);
           })
         );
+
+        it('should sanitize every candidate, even after an invalid descriptor', function() {
+          // A candidate with a non-numeric descriptor (e.g. `xyz`) must not cause the candidates
+          // that follow it to bypass the `imgSrcSanitizationTrustedUrlList`.
+          module(function($compileProvider) {
+            $compileProvider.imgSrcSanitizationTrustedUrlList(/^https:\/\/angularjs\.org\//);
+          });
+          inject(function($rootScope, $compile) {
+            var element = $compile('<' + srcsetElement + ' ng-prop-srcset="testUrl"></' + srcsetElement + '>')($rootScope);
+            $rootScope.testUrl = 'https://angularjs.org/favicon.ico xyz,https://angular.dev/favicon.ico';
+            $rootScope.$digest();
+            expect(element.prop('srcset')).toEqual(
+                'https://angularjs.org/favicon.ico xyz,unsafe:https://angular.dev/favicon.ico');
+
+            $rootScope.testUrl = 'https://angularjs.org/favicon.ico 1x,https://angular.dev/favicon.ico 2x';
+            $rootScope.$digest();
+            expect(element.prop('srcset')).toEqual(
+                'https://angularjs.org/favicon.ico 1x,unsafe:https://angular.dev/favicon.ico 2x');
+          });
+        });
       });
     }
   });
