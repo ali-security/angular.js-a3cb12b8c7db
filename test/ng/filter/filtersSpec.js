@@ -199,6 +199,151 @@ describe('filters', function() {
         expect(currency(-1.07, '')).toBe('  --  1.07  --  ');
       })
     );
+
+    it('should only trim whitespace adjacent to the currency symbol if it is empty',
+      inject(function($locale) {
+        var formats = $locale.NUMBER_FORMATS;
+        var pattern = formats.PATTERNS[1];
+
+        // Currency symbol as a prefix only
+        pattern.posPre = ' \t¤\n ';
+        pattern.posSuf = '';
+        expect(currency(1.07, '')).toBe('1.07');
+        expect(currency(1.07, 'USD')).toBe(' \tUSD\n 1.07');
+
+        // Currency symbol as a suffix only, with whitespace that is not adjacent to it
+        formats.GROUP_SEP = ' ';
+        pattern.posPre = ' ';
+        pattern.posSuf = ' ¤ ';
+        expect(currency(1234.5, '')).toBe(' 1 234.50');
+        expect(currency(1234.5, 'EUR')).toBe(' 1 234.50 EUR ');
+
+        // Multiple and adjacent currency symbols
+        pattern.posPre = 'a ¤ b ¤  ¤ ';
+        pattern.posSuf = ' c';
+        expect(currency(1.07, '')).toBe('ab1.07 c');
+        expect(currency(1.07, 'X')).toBe('a X b X  X 1.07 c');
+
+        // No currency symbol in the pattern
+        pattern.negPre = ' - ';
+        pattern.negSuf = ' ';
+        expect(currency(-1.07, '')).toBe(' - 1.07 ');
+        expect(currency(-1.07, 'X')).toBe(' - 1.07 ');
+
+        // Empty currency symbol taken from the locale
+        formats.CURRENCY_SYM = '';
+        pattern.negPre = '- ¤ ';
+        pattern.negSuf = ' ¤ -';
+        expect(currency(-1.07)).toBe('-1.07-');
+      })
+    );
+
+    describe('with long whitespace runs in the locale (CVE-2022-25844)', function() {
+      var spaces;
+
+      beforeEach(function() {
+        spaces = new Array(60001).join(' ');
+      });
+
+      function expectFastCurrency(amount, currencySymbol, expected) {
+        var start = Date.now();
+        var result = currency(amount, currencySymbol);
+        var elapsed = Date.now() - start;
+
+        // Avoid dumping huge strings in failure messages
+        expect(result.length).toBe(expected.length);
+        expect(result === expected).toBe(true);
+        expect(elapsed).toBeLessThan(1000);
+      }
+
+      it('should not be vulnerable to ReDoS via a whitespace-only `posPre` and an empty symbol',
+        inject(function($locale) {
+          // Exploit from the advisory: `posPre: ' '.repeat(...)` with `currencySymbol: ''`
+          $locale.NUMBER_FORMATS.PATTERNS[1].posPre = spaces;
+
+          expectFastCurrency(100, '', spaces + '100.00');
+        })
+      );
+
+      it('should not be vulnerable to ReDoS when the locale currency symbol is empty',
+        inject(function($locale) {
+          $locale.NUMBER_FORMATS.CURRENCY_SYM = '';
+          $locale.NUMBER_FORMATS.PATTERNS[1].posSuf = spaces;
+
+          expectFastCurrency(100, undefined, '100.00' + spaces);
+        })
+      );
+
+      it('should not be vulnerable to ReDoS via a whitespace-only `negSuf` and an empty symbol',
+        inject(function($locale) {
+          $locale.NUMBER_FORMATS.PATTERNS[1].negSuf = spaces;
+
+          expectFastCurrency(-100, '', '-100.00' + spaces);
+        })
+      );
+
+      it('should not be vulnerable to ReDoS via whitespace not adjacent to the symbol',
+        inject(function($locale) {
+          var pattern = $locale.NUMBER_FORMATS.PATTERNS[1];
+          pattern.posPre = spaces + 'x¤';
+          pattern.posSuf = '¤y' + spaces;
+
+          expectFastCurrency(100, '', spaces + 'x100.00y' + spaces);
+        })
+      );
+
+      it('should not be vulnerable to ReDoS via a whitespace group separator',
+        inject(function($locale) {
+          $locale.NUMBER_FORMATS.GROUP_SEP = spaces;
+
+          expectFastCurrency(1234567, '', '1' + spaces + '234' + spaces + '567.00');
+        })
+      );
+
+      it('should not run a backtracking whitespace regular expression over the formatted text',
+        inject(function($locale) {
+          // Some JavaScript engines mitigate catastrophic backtracking on their own, which hides
+          // the slowdown from the timing based tests above, so verify this independently of the engine.
+          var pattern = $locale.NUMBER_FORMATS.PATTERNS[1];
+          pattern.posPre = spaces + 'x¤';
+          pattern.posSuf = '¤y' + spaces;
+          pattern.negPre = spaces;
+          pattern.negSuf = spaces;
+
+          var recording = false;
+          var replaceRegExps = [];
+          var originalReplace = String.prototype.replace;
+          spyOn(String.prototype, 'replace').and.callFake(function(searchValue) {
+            if (recording && searchValue instanceof RegExp) {
+              replaceRegExps.push(searchValue.source);
+            }
+            return originalReplace.apply(this, arguments);
+          });
+
+          recording = true;
+          var positive = currency(100, '');
+          var negative = currency(-100, '');
+          recording = false;
+
+          expect(positive === spaces + 'x100.00y' + spaces).toBe(true);
+          expect(negative === spaces + '100.00' + spaces).toBe(true);
+          for (var i = 0; i < replaceRegExps.length; i++) {
+            expect(replaceRegExps[i]).not.toMatch(/\\s[*+]/);
+          }
+        })
+      );
+
+      it('should trim long whitespace runs adjacent to an empty symbol',
+        inject(function($locale) {
+          var pattern = $locale.NUMBER_FORMATS.PATTERNS[1];
+          pattern.posPre = spaces + '¤' + spaces;
+          pattern.posSuf = spaces + '¤' + spaces + '¤' + spaces;
+
+          expectFastCurrency(100, '', '100.00');
+          expectFastCurrency(100, '$', spaces + '$' + spaces + '100.00' + spaces + '$' + spaces + '$' + spaces);
+        })
+      );
+    });
   });
 
   describe('number', function() {

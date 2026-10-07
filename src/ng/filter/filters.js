@@ -68,15 +68,49 @@ function currencyFilter($locale) {
       fractionSize = formats.PATTERNS[1].maxFrac;
     }
 
-    // If the currency symbol is empty, trim whitespace around the symbol
-    var currencySymbolRe = !currencySymbol ? /\s*\u00A4\s*/g : /\u00A4/g;
-
     // if null or undefined pass it through
-    return (amount == null)
-        ? amount
-        : formatNumber(amount, formats.PATTERNS[1], formats.GROUP_SEP, formats.DECIMAL_SEP, fractionSize).
-            replace(currencySymbolRe, currencySymbol);
+    if (amount == null) {
+      return amount;
+    }
+
+    var formattedNumber = formatNumber(amount, formats.PATTERNS[1], formats.GROUP_SEP, formats.DECIMAL_SEP, fractionSize);
+
+    // Check for the currency symbol placeholder first and avoid regular expressions such as
+    // `/\s*\u00A4\s*/g` when trimming whitespace around it, as they are vulnerable to ReDoS on long
+    // whitespace runs (e.g. coming from the locale patterns). See CVE-2022-25844.
+    if (formattedNumber.indexOf('\u00A4') === -1) {
+      return formattedNumber;
+    }
+
+    // If the currency symbol is empty, trim whitespace around the symbol
+    if (!currencySymbol) {
+      var parts = formattedNumber.split('\u00A4');
+      var lastIndex = parts.length - 1;
+      parts[0] = trimWhitespaceEnd(parts[0]);
+      for (var i = 1; i < lastIndex; i++) {
+        parts[i] = trim(parts[i]);
+      }
+      parts[lastIndex] = trimWhitespaceStart(parts[lastIndex]);
+      formattedNumber = parts.join('\u00A4');
+    }
+
+    return formattedNumber.replace(/\u00A4/g, currencySymbol);
   };
+}
+
+var WHITESPACE_CHAR_REGEXP = /\s/;
+
+// Linear-time equivalents of `String.prototype.trimStart/trimEnd` (not available in ES5).
+function trimWhitespaceStart(value) {
+  var start = 0;
+  while (start < value.length && WHITESPACE_CHAR_REGEXP.test(value.charAt(start))) start++;
+  return value.slice(start);
+}
+
+function trimWhitespaceEnd(value) {
+  var end = value.length;
+  while (end > 0 && WHITESPACE_CHAR_REGEXP.test(value.charAt(end - 1))) end--;
+  return value.slice(0, end);
 }
 
 /**
