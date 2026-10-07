@@ -30,6 +30,21 @@ describe('ngSrcset', function() {
     expect(element.attr('srcset')).toBe('http://example.com/image1.png 1x,unsafe:javascript:doEvilStuff() 2x');
   }));
 
+  it('should sanitize urls separated by long whitespace runs in linear time (ReDoS)', inject(function($rootScope, $compile) {
+    // A long run of whitespace that is not followed by a descriptor and a comma caused
+    // catastrophic backtracking in the regular expression previously used to split srcset.
+    var whitespace = new Array(60001).join(' ');
+    $rootScope.imageUrl = 'http://example.com/image1.png 1x, javascript:doEvilStuff()' + whitespace + '2x';
+    element = $compile('<img ng-srcset="{{imageUrl}}">')($rootScope);
+
+    var start = Date.now();
+    $rootScope.$digest();
+    var duration = Date.now() - start;
+
+    expect(element.attr('srcset')).toBe('http://example.com/image1.png 1x,unsafe:javascript:doEvilStuff() 2x');
+    expect(duration).toBeLessThan(1000);
+  }));
+
   it('should not throw an error if undefined', inject(function($rootScope, $compile) {
     element = $compile('<img ng-attr-srcset="{{undefined}}">')($rootScope);
     $rootScope.$digest();
