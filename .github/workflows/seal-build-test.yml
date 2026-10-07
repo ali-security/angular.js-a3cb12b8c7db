@@ -1,0 +1,105 @@
+name: Seal Build and Test
+
+# Upstream angular.js 1.8.x has no GitHub Actions CI (it used CircleCI, .circleci/config.yml).
+# This workflow mirrors its `build` (yarn grunt package) and `unit-test` / `unit-test-jquery`
+# jobs on headless Chrome, and assembles the npm tarball the way scripts/bower/publish.sh does
+# (copy build output into the angular/bower-angular repo, then npm publish).
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Grunt test target suffix to run alone (e.g. jqlite, modules, docs, jquery); empty runs the full suite"
+        required: false
+        default: ''
+
+jobs:
+  build-and-test:
+    name: Build and test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: "14.19.0"
+            pack: true
+          - node: "12"
+            pack: false
+    env:
+      CHROME_BIN: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Tag the release commit
+        # lib/versions/version-info.js derives the version and codename from an annotated tag on HEAD
+        run: |
+          git config user.name "seal-builder"
+          git config user.email "seal-builder@users.noreply.github.com"
+          git tag -f -a v1.8.3 -m "chore(release): v1.8.3 codename(ultimate-farewell)"
+          git describe --exact-match
+
+      - name: Allow Chrome sandbox (Ubuntu 24.04 userns restriction)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install
+        run: |
+          npm install -g yarn@1.22.19 grunt-cli@1.4.3
+          yarn install --frozen-lockfile --ignore-engines --non-interactive
+
+      - name: Build (grunt package)
+        run: yarn grunt package
+
+      - name: Test
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            yarn grunt test:${{ inputs.test-filter }} --browsers=ChromeHeadless --reporters=spec
+          else
+            # Run every suite, then fail the step if any of them failed
+            failed=""
+            yarn grunt test:promises-aplus || failed="$failed promises-aplus"
+            for suite in jqlite modules docs jquery jquery-2.2 jquery-2.1; do
+              task="test:$suite"
+              if [ "$suite" = "docs" ]; then task="tests:docs"; fi
+              yarn grunt "$task" --browsers=ChromeHeadless --reporters=spec || failed="$failed $suite"
+            done
+            if [ -n "$failed" ]; then
+              echo "Failed test suites:$failed"
+              exit 1
+            fi
+            echo "All test suites passed"
+          fi
+
+      - name: Assemble npm package (scripts/bower/publish.sh prepare)
+        if: matrix.pack
+        run: |
+          gzip -c < build/angular.min.js > build/angular.min.js.gzip
+          ls -l build/angular.*
+          git clone --depth=1 --branch v1.8.2 https://github.com/angular/bower-angular.git "$RUNNER_TEMP/bower-angular"
+          cd "$RUNNER_TEMP/bower-angular"
+          rm -rf .git angular.js angular.min.js angular.min.js.map angular.min.js.gzip angular-csp.css
+          cp "$GITHUB_WORKSPACE"/build/angular.* .
+          cp "$GITHUB_WORKSPACE"/build/angular-csp.css .
+          NEW_VERSION=$(cat "$GITHUB_WORKSPACE/build/version.txt")
+          echo "NEW_VERSION=$NEW_VERSION"
+          sed -i -E "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" bower.json package.json
+          cat package.json bower.json
+          ls -la
+          mkdir -p "$GITHUB_WORKSPACE/npm-dist"
+          npm --version
+          npm pack
+          mv angular-*.tgz "$GITHUB_WORKSPACE/npm-dist/"
+          tar tzvf "$GITHUB_WORKSPACE"/npm-dist/angular-*.tgz
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.pack
+        with:
+          name: npm-package
+          path: npm-dist/angular-*.tgz
+          if-no-files-found: error
