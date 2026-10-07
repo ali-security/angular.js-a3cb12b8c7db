@@ -90,6 +90,112 @@ describe('angular', function() {
       expect(copy(objWithRegExp.re) === objWithRegExp.re).toBeFalsy();
     });
 
+    describe('RegExp flags', function() {
+      function supportsRegExpFlag(flag) {
+        try {
+          return new RegExp('x', flag) instanceof RegExp;
+        } catch (e) {
+          return false;
+        }
+      }
+
+      function supportedFlags() {
+        var flags = 'gim';
+        if (supportsRegExpFlag('u')) flags += 'u';
+        if (supportsRegExpFlag('y')) flags += 'y';
+        return flags;
+      }
+
+      function expectSameFlags(actual, expected) {
+        expect(actual.global).toBe(expected.global);
+        expect(actual.ignoreCase).toBe(expected.ignoreCase);
+        expect(actual.multiline).toBe(expected.multiline);
+        expect(!!actual.unicode).toBe(!!expected.unicode);
+        expect(!!actual.sticky).toBe(!!expected.sticky);
+      }
+
+      it('should preserve every supported flag and lastIndex', function() {
+        var flags = supportedFlags();
+        var re = new RegExp('x', flags);
+        re.lastIndex = 3;
+
+        var copied = copy(re);
+
+        expect(copied).not.toBe(re);
+        expect(copied instanceof RegExp).toBe(true);
+        expect(copied.source).toBe('x');
+        expect(copied.toString()).toBe(re.toString());
+        expect(copied.lastIndex).toBe(3);
+        expectSameFlags(copied, re);
+        expect(copied.global).toBe(true);
+        expect(copied.ignoreCase).toBe(true);
+        expect(copied.multiline).toBe(true);
+      });
+
+      it('should preserve each flag individually', function() {
+        var flags = supportedFlags().split('');
+        for (var i = 0; i < flags.length; i++) {
+          var re = new RegExp('x', flags[i]);
+          var copied = copy(re);
+          expect(copied.toString()).toBe('/x/' + flags[i]);
+          expectSameFlags(copied, re);
+        }
+
+        var noFlags = copy(/x/);
+        expect(noFlags.toString()).toBe('/x/');
+        expectSameFlags(noFlags, /x/);
+      });
+
+      it('should preserve flags when `RegExp.prototype.flags` is not available', function() {
+        // Support: IE 9-11 only
+        var flags = supportedFlags();
+        var re = new RegExp('x', flags);
+        re.lastIndex = 2;
+        Object.defineProperty(re, 'flags', {value: undefined});
+
+        var copied = copy(re);
+
+        expect(copied).not.toBe(re);
+        expect(copied.source).toBe('x');
+        expect(copied.toString()).toBe(new RegExp('x', flags).toString());
+        expect(copied.lastIndex).toBe(2);
+        expectSameFlags(copied, re);
+      });
+
+      it('should not extract the flags by matching against `toString()` (CVE-2023-26116)', function() {
+        // A long pattern without any `/` makes `source.toString().match(/[^/]*$/)` backtrack
+        // quadratically, so the flags must not be derived from the string representation.
+        var re = new RegExp(new Array(50001).join('a'), 'gi');
+        spyOn(re, 'toString').and.callThrough();
+        spyOn(String.prototype, 'match').and.callThrough();
+
+        var copied = copy(re);
+
+        var toStringCalled = re.toString.calls.any();
+        var matchCalls = String.prototype.match.calls.allArgs();
+
+        expect(toStringCalled).toBe(false);
+        expect(matchCalls.length).toBe(0);
+        expect(copied.source).toBe(re.source);
+        expect(copied.global).toBe(true);
+        expect(copied.ignoreCase).toBe(true);
+        expect(copied.multiline).toBe(false);
+      });
+
+      it('should copy a RegExp with a very long source quickly (CVE-2023-26116)', function() {
+        var source = new Array(100001).join('a');
+        var re = new RegExp(source, 'g');
+
+        var start = Date.now();
+        var copied = copy(re);
+        var elapsed = Date.now() - start;
+
+        expect(copied.source).toBe(source);
+        expect(copied.global).toBe(true);
+        expect(elapsed).toBeLessThan(1000);
+      });
+    });
+
     it('should copy a Uint8Array with no destination', function() {
       if (typeof Uint8Array !== 'undefined') {
         var src = new Uint8Array(2);

@@ -999,7 +999,18 @@ function copy(source, destination, maxDepth) {
         return new source.constructor(source.valueOf());
 
       case '[object RegExp]':
-        var re = new RegExp(source.source, source.toString().match(/[^/]*$/)[0]);
+        var flags = source.flags;
+        if (!isString(flags)) {
+          // Support: IE 9-11 only (no `RegExp.prototype.flags`)
+          // Build the flags from the individual properties instead of running a regular
+          // expression against `source.toString()`, which is vulnerable to ReDoS.
+          flags = (source.global ? 'g' : '') +
+            (source.ignoreCase ? 'i' : '') +
+            (source.multiline ? 'm' : '') +
+            (source.unicode ? 'u' : '') +
+            (source.sticky ? 'y' : '');
+        }
+        var re = new RegExp(source.source, flags);
         re.lastIndex = source.lastIndex;
         return re;
 
